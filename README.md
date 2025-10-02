@@ -12,7 +12,7 @@
 <div align="center">
   <h1 align="center">KitsuneLab©</h1>
   <h3 align="center">CS2 Advanced GOTV</h3>
-  <a align="center">Automatically handles GOTV recording, able to crop demos for every round separately. Sends the recorded demo as zipped to Discord Webhook as attachment or upload to Mega and send the url. Customizable webhook, avatar, bot name, embed and more. Automatically stop recording on idle and additionaly it can be set to be used in request mode, so it records all round separately but upload only those rounds that has been requested by users with !demo.</a>
+  <a align="center">Automatically handles GOTV recording, able to crop demos for every round separately. Sends the recorded demo as zipped to Discord Webhook as attachment or uploads via FTP when configured. Customizable webhook, avatar, bot name, embed and more. Automatically stop recording on idle and additionaly it can be set to be used in request mode, so it records all round separately but upload only those rounds that has been requested by users with !demo.</a>
 
   <p align="center">
     <br />
@@ -46,7 +46,6 @@ They all should be used in the format `{placeholder}`
 - `timedate` - Represents the current date and time in the format "yyyy-MM-dd HH:mm:ss".
 - `length` - Represents the duration of something, likely a demo length, formatted as "mm:ss".
 - `round` - Represents the total number of rounds played in a game.
-- `mega_link` - Represents whether a file has been uploaded to Mega or not.
 - `requester_name` - Represents the names of the requesters, separated by commas.
 - `requester_steamid` - Represents the Steam IDs of the requesters, separated by commas.
 - `requester_both` - Represents both the names and Steam IDs of the requesters, formatted as "name (steamid)", separated by commas.

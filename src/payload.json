@@ -40,7 +40,7 @@
         },
         {
           "name": "Download Links",
-          "value": "**Mega:** [Click Here]({mega_link})\n**FTP:** [Click Here]({ftp_link})",
+          "value": "**FTP:** [Click Here]({ftp_link})\n{file_size_warning}",
           "inline": false
         },
         {
@@ -50,7 +50,7 @@
         }
       ],
       "footer": {
-        "text": "Recorded on {server_name} • {iso_timestamp}"
+        "text": "Recorded on {server_name} | {iso_timestamp}"
       }
     }
   ]

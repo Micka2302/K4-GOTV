@@ -14,16 +14,11 @@ public sealed class PluginConfig : BasePluginConfig
 	[JsonPropertyName("auto-record")]
 	public AutoRecordSettings AutoRecord { get; set; } = new AutoRecordSettings();
 
-	[JsonPropertyName("mega")]
-	public MegaSettings Mega { get; set; } = new MegaSettings();
-
 	[JsonPropertyName("demo-request")]
 	public DemoRequestSettings DemoRequest { get; set; } = new DemoRequestSettings();
 
 	[JsonPropertyName("ftp")]
 	public FtpSettings Ftp { get; set; } = new FtpSettings();
-
-	public DatabaseSettings Database { get; set; } = new DatabaseSettings();
 
 	[JsonPropertyName("ConfigVersion")]
 	public override int Version { get; set; } = 11;
@@ -115,24 +110,6 @@ public sealed class PluginConfig : BasePluginConfig
 		public int IdleTimeSeconds { get; set; } = 300;
 	}
 
-	public class MegaSettings
-	{
-		[JsonPropertyName("enabled")]
-		public bool Enabled { get; set; } = false;
-
-		[JsonPropertyName("email")]
-		public string Email { get; set; } = "";
-
-		[JsonPropertyName("password")]
-		public string Password { get; set; } = "";
-
-		[JsonPropertyName("retention-enabled")]
-		public bool RetentionEnabled { get; set; } = false;
-
-		[JsonPropertyName("retention-hours")]
-		public int RetentionHours { get; set; } = 72;
-	}
-
 	public class DemoRequestSettings
 	{
 		[JsonPropertyName("enabled")]
@@ -173,32 +150,5 @@ public sealed class PluginConfig : BasePluginConfig
 
 		[JsonPropertyName("retention-hours")]
 		public int RetentionHours { get; set; } = 72;
-	}
-
-	public class DatabaseSettings
-	{
-		[JsonPropertyName("enabled")]
-		public bool Enable { get; set; } = false;
-
-		[JsonPropertyName("host")]
-		public string Host { get; set; } = "localhost";
-
-		[JsonPropertyName("port")]
-		public uint Port { get; set; } = 3306;
-
-		[JsonPropertyName("name")]
-		public string Name { get; set; } = "";
-
-		[JsonPropertyName("username")]
-		public string Username { get; set; } = "";
-
-		[JsonPropertyName("password")]
-		public string Password { get; set; } = "";
-
-		[JsonPropertyName("ssl-mode")]
-		public string Sslmode { get; set; } = "preferred";
-
-		[JsonPropertyName("table_prefix")]
-		public string Table_prefix { get; set; } = "";
 	}
 }
