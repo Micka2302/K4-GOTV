@@ -27,7 +27,8 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	private readonly List<(string name, ulong steamid)> Requesters = [];
 	private double DemoStartTime = 0.0;
 	private int maxFileSizeInMB = 25;
-	private string DemoDirectory => Path.Combine(Server.GameDirectory, "csgo", Config.General.DemoDirectory);
+	private string demoDirectoryPath = string.Empty;
+	private string DemoDirectory => demoDirectoryPath;
 	private UploadService? uploadService;
 	private string RetentionFilePath => Path.Combine(ModuleDirectory, "uploads_retention.json");
 	private record UploadRetentionRecord(string Identifier, DateTime UploadedAt);
@@ -84,7 +85,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			return HookResult.Continue;
 		});
 
-		Directory.CreateDirectory(Path.Combine(Server.GameDirectory, "csgo", Config.General.DemoDirectory));
+		EnsureDemoDirectory(Config);
 
 		if (Config.DemoRequest.Enabled)
 			AddCommand("css_demo", "Request the upload of the current demo", Command_DemoRequest);
@@ -403,16 +404,8 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			config.General.DemoDirectory = "discord_demos";
 		}
 
-		string fullDemoPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
-		try
-		{
-			Directory.CreateDirectory(fullDemoPath);
-		}
-		catch (Exception ex)
-		{
-			Logger.LogError($"Failed to create demo directory: {ex.Message}");
-			config.General.DemoDirectory = "discord_demos";
-		}
+		EnsureDemoDirectory(config);
+
 
 		if (config.DemoRequest.Enabled)
 		{
@@ -433,6 +426,35 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		this.Config = config;
 	}
 
+	private void EnsureDemoDirectory(PluginConfig config)
+	{
+		var resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+
+		try
+		{
+			Directory.CreateDirectory(resolvedPath);
+			demoDirectoryPath = resolvedPath;
+			return;
+		}
+		catch (Exception ex)
+		{
+			Logger.LogError($"Failed to create demo directory: {ex.Message}");
+		}
+
+		config.General.DemoDirectory = "discord_demos";
+		resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+
+		try
+		{
+			Directory.CreateDirectory(resolvedPath);
+		}
+		catch (Exception fallbackEx)
+		{
+			Logger.LogError($"Fallback demo directory creation failed: {fallbackEx.Message}");
+		}
+
+		demoDirectoryPath = resolvedPath;
+	}
 	private List<UploadRetentionRecord> LoadRetentionRecords()
 	{
 		if (!File.Exists(RetentionFilePath))
