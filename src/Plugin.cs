@@ -23,8 +23,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private string? fileName = null;
 	private double LastPlayerCheckTime;
-	private bool DemoRequestedThisRound = false;
-	private readonly List<(string name, ulong steamid)> Requesters = [];
 	private double DemoStartTime = 0.0;
 	private int maxFileSizeInMB = 25;
 	private string demoDirectoryPath = string.Empty;
@@ -61,9 +59,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				if (Config.AutoRecord.CropRounds && !string.IsNullOrEmpty(fileName))
 					Server.ExecuteCommand("tv_stoprecord");
 
-				if (Config.AutoRecord.CropRounds)
-					Requesters.Clear();
-
 				if (string.IsNullOrEmpty(fileName) && PlayerCount() > 0)
 					Server.NextWorldUpdate(() => Server.ExecuteCommand("tv_record \"autodemo\""));
 			}
@@ -86,9 +81,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		});
 
 		EnsureDemoDirectory(Config);
-
-		if (Config.DemoRequest.Enabled)
-			AddCommand("css_demo", "Request the upload of the current demo", Command_DemoRequest);
 
 		if (Config.AutoRecord.StopOnIdle)
 		{
@@ -212,14 +204,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			return HookResult.Continue;
 		}
 
-		if (Config.DemoRequest.Enabled && !DemoRequestedThisRound)
-		{
-			if (Config.DemoRequest.DeleteUnused)
-				_ = Task.Run(() => FileManager.DeleteFileAsync(demoPath, Logger, Config.General.LogDeletions));
-
-			ResetVariables();
-			return HookResult.Continue;
-		}
 
 		ProcessUpload(fileName, demoPath);
 		ResetVariables();
@@ -231,7 +215,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	{
 		string zipPath = Path.Combine(DemoDirectory, $"{fileName}.zip");
 		var demoLength = TimeSpan.FromSeconds(Server.EngineTime - DemoStartTime);
-		var requestersSnapshot = Requesters.ToList();
 		string mapName = Server.MapName;
 		string serverName = ConVar.Find("hostname")?.StringValue ?? "Unknown Server";
 		string roundLabel = (GameRules()?.GameRules?.TotalRoundsPlayed + 1)?.ToString() ?? "Unknown";
@@ -253,10 +236,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			["length"] = $"{demoLength.Minutes:00}:{demoLength.Seconds:00}",
 			["round"] = roundLabel,
 			["ftp_link"] = "Not uploaded to FTP.",
-			["requester_name"] = string.Join(", ", requestersSnapshot.Select(x => x.name)),
-			["requester_steamid"] = string.Join(", ", requestersSnapshot.Select(x => x.steamid)),
-			["requester_both"] = string.Join("\n", requestersSnapshot.Select(x => $"{x.name} ({x.steamid})")),
-			["requester_count"] = requestersSnapshot.Count.ToString(),
 			["player_count"] = playerCount.ToString(),
 			["server_name"] = serverName,
 			["fileName"] = Path.GetFileNameWithoutExtension(fileName),
@@ -343,7 +322,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private void ResetVariables()
 	{
-		DemoRequestedThisRound = false;
 		DemoStartTime = 0.0;
 		fileName = null;
 	}
@@ -375,23 +353,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		return ReplacePlaceholders(pattern, placeholders);
 	}
 
-	public void Command_DemoRequest(CCSPlayerController? player, CommandInfo info)
-	{
-		if (Config.DemoRequest.PrintAll)
-		{
-			if (!DemoRequestedThisRound)
-				Server.PrintToChatAll($" {Localizer["k4.general.prefix"]} {Localizer["k4.chat.demo.request.all", player?.PlayerName ?? "Server"]}");
-		}
-		else
-		{
-			info.ReplyToCommand($" {Localizer["k4.general.prefix"]} {Localizer["k4.chat.demo.request.self"]}");
-		}
-
-		if (player?.IsValid == true && !Requesters.Contains((player.PlayerName, player.SteamID)))
-			Requesters.Add((player.PlayerName, player.SteamID));
-
-		DemoRequestedThisRound = true;
-	}
 
 	public void OnConfigParsed(PluginConfig config)
 	{
@@ -406,12 +367,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 		EnsureDemoDirectory(config);
 
-
-		if (config.DemoRequest.Enabled)
-		{
-			config.AutoRecord.Enabled = true;
-			config.AutoRecord.CropRounds = true;
-		}
 
 		if (config.AutoRecord.CropRounds && !config.AutoRecord.Enabled)
 			Logger.LogWarning("AutoRecord.CropRounds enabled but AutoRecord is disabled. CropRounds will not work.");
@@ -524,6 +479,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	public static CCSGameRulesProxy? GameRules()
 		=> Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
 }
+
 
 
 

@@ -42,11 +42,6 @@
           "name": "Download Links",
           "value": "**FTP:** [Click Here]({ftp_link})\n{file_size_warning}",
           "inline": false
-        },
-        {
-          "name": "Requested By ({requester_count})",
-          "value": "**Names:** {requester_name}\n**Steam IDs:** {requester_steamid}\n**Details:**\n{requester_both}",
-          "inline": false
         }
       ],
       "footer": {
@@ -55,3 +50,4 @@
     }
   ]
 }
+

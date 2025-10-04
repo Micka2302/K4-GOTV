@@ -14,14 +14,12 @@ public sealed class PluginConfig : BasePluginConfig
 	[JsonPropertyName("auto-record")]
 	public AutoRecordSettings AutoRecord { get; set; } = new AutoRecordSettings();
 
-	[JsonPropertyName("demo-request")]
-	public DemoRequestSettings DemoRequest { get; set; } = new DemoRequestSettings();
 
 	[JsonPropertyName("ftp")]
 	public FtpSettings Ftp { get; set; } = new FtpSettings();
 
 	[JsonPropertyName("ConfigVersion")]
-	public override int Version { get; set; } = 11;
+	public override int Version { get; set; } = 12;
 
 	public class GeneralSettings
 	{
@@ -110,18 +108,6 @@ public sealed class PluginConfig : BasePluginConfig
 		public int IdleTimeSeconds { get; set; } = 300;
 	}
 
-	public class DemoRequestSettings
-	{
-		[JsonPropertyName("enabled")]
-		public bool Enabled { get; set; } = false;
-
-		[JsonPropertyName("print-all")]
-		public bool PrintAll { get; set; } = true;
-
-		[JsonPropertyName("delete-unused")]
-		public bool DeleteUnused { get; set; } = true;
-	}
-
 	public class FtpSettings
 	{
 		[JsonPropertyName("enabled")]
@@ -152,3 +138,4 @@ public sealed class PluginConfig : BasePluginConfig
 		public int RetentionHours { get; set; } = 72;
 	}
 }
+
