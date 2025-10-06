@@ -59,7 +59,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				if (Config.AutoRecord.CropRounds && !string.IsNullOrEmpty(fileName))
 					Server.ExecuteCommand("tv_stoprecord");
 
-				if (string.IsNullOrEmpty(fileName) && PlayerCount() > 0)
+				if (string.IsNullOrEmpty(fileName) && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 					Server.NextWorldUpdate(() => Server.ExecuteCommand("tv_record \"autodemo\""));
 			}
 			return HookResult.Continue;
@@ -71,7 +71,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			if (player?.IsValid == true && !player.IsBot && !player.IsHLTV)
 				LastPlayerCheckTime = Server.EngineTime;
 
-			if (string.IsNullOrEmpty(fileName) && Config.AutoRecord.Enabled)
+			if (string.IsNullOrEmpty(fileName) && Config.AutoRecord.Enabled && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 			{
 				Server.ExecuteCommand("tv_record");
 				Logger.LogInformation("Recording started due to player activity detected.");
@@ -104,7 +104,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			}, TimerFlags.REPEAT);
 		}
 
-		if (Config.AutoRecord.Enabled && hotReload && PlayerCount() > 0)
+		if (Config.AutoRecord.Enabled && hotReload && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 			Server.ExecuteCommand("tv_record \"autodemo\"");
 
 		maxFileSizeInMB = (Config.Discord.ServerBoost == 2) ? 50 : (Config.Discord.ServerBoost == 3) ? 100 : 25;
@@ -374,9 +374,15 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		if (string.IsNullOrEmpty(config.Discord.WebhookURL))
 			Logger.LogWarning("Discord.WebhookURL is not set. Discord upload will be skipped.");
 
+
 		if (config.AutoRecord.StopOnIdle && config.AutoRecord.IdleTimeSeconds <= 0)
 			Logger.LogWarning("AutoRecord.IdleTimeSeconds must be greater than 0 when StopOnIdle is enabled.");
 
+		if (config.AutoRecord.MinPlayerStartRecord < 1)
+		{
+			Logger.LogWarning("AutoRecord.MinPlayerStartRecord must be at least 1. Using 1.");
+			config.AutoRecord.MinPlayerStartRecord = 1;
+		}
 
 		this.Config = config;
 	}

@@ -19,7 +19,7 @@ public sealed class PluginConfig : BasePluginConfig
 	public FtpSettings Ftp { get; set; } = new FtpSettings();
 
 	[JsonPropertyName("ConfigVersion")]
-	public override int Version { get; set; } = 12;
+	public override int Version { get; set; } = 13;
 
 	public class GeneralSettings
 	{
@@ -100,6 +100,9 @@ public sealed class PluginConfig : BasePluginConfig
 
 		[JsonPropertyName("record-warmup")]
 		public bool RecordWarmup { get; set; } = true;
+
+		[JsonPropertyName("min-player-start-record")]
+		public int MinPlayerStartRecord { get; set; } = 2;
 
 		[JsonPropertyName("idle-player-count-threshold")]
 		public int IdlePlayerCountThreshold { get; set; } = 0;
