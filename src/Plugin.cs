@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Timers;
+using CounterStrikeSharp.API.Core.Translations;
 using Microsoft.Extensions.Logging;
 
 namespace K4GOTV;
@@ -186,6 +187,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 		string relativePath = Path.Combine(Config.General.DemoDirectory, $"{fileName}.dem");
 		Server.ExecuteCommand($"tv_record \"{relativePath}\"");
+		AnnounceRecordingStart();
 		return HookResult.Stop;
 	}
 
@@ -474,6 +476,22 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		if (recordsToRemove.Count != 0)
 		{
 			SaveRetentionRecords(records.Except(recordsToRemove).ToList());
+		}
+	}
+
+	private void AnnounceRecordingStart()
+	{
+		if (string.IsNullOrEmpty(fileName))
+			return;
+
+		foreach (var target in Utilities.GetPlayers())
+		{
+			if (target?.IsValid != true || target.IsBot || target.IsHLTV)
+				continue;
+
+			string prefix = Localizer?.ForPlayer(target, "k4.general.prefix") ?? "{silver}[K4-GOTV]";
+			string message = Localizer?.ForPlayer(target, "k4.demo.start", fileName) ?? $"Recording started for demo {fileName}";
+			target.PrintToChat($"{prefix} {message}");
 		}
 	}
 
