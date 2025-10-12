@@ -27,6 +27,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	private double DemoStartTime = 0.0;
 	private int maxFileSizeInMB = 25;
 	private string demoDirectoryPath = string.Empty;
+	private bool mapChangePending = false;
 	private string DemoDirectory => demoDirectoryPath;
 	private UploadService? uploadService;
 	private string RetentionFilePath => Path.Combine(ModuleDirectory, "uploads_retention.json");
@@ -43,14 +44,21 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 		RegisterEventHandler((EventCsWinPanelMatch @event, GameEventInfo info) =>
 		{
+			mapChangePending = true;
 			Server.ExecuteCommand("tv_stoprecord");
 			return HookResult.Continue;
 		});
 
 		RegisterListener<Listeners.OnMapEnd>(() =>
 		{
+			mapChangePending = true;
 			if (!string.IsNullOrEmpty(fileName))
 				Server.ExecuteCommand("tv_stoprecord");
+		});
+
+		RegisterListener<Listeners.OnMapStart>((mapName) =>
+		{
+			mapChangePending = false;
 		});
 
 		RegisterEventHandler((EventRoundStart @event, GameEventInfo info) =>
@@ -60,7 +68,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				if (Config.AutoRecord.CropRounds && !string.IsNullOrEmpty(fileName))
 					Server.ExecuteCommand("tv_stoprecord");
 
-				if (string.IsNullOrEmpty(fileName) && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
+				if (!mapChangePending && string.IsNullOrEmpty(fileName) && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 					Server.NextWorldUpdate(() => Server.ExecuteCommand("tv_record \"autodemo\""));
 			}
 			return HookResult.Continue;
@@ -72,7 +80,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			if (player?.IsValid == true && !player.IsBot && !player.IsHLTV)
 				LastPlayerCheckTime = Server.EngineTime;
 
-			if (string.IsNullOrEmpty(fileName) && Config.AutoRecord.Enabled && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
+			if (!mapChangePending && string.IsNullOrEmpty(fileName) && Config.AutoRecord.Enabled && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 			{
 				Server.ExecuteCommand("tv_record");
 				Logger.LogInformation("Recording started due to player activity detected.");
@@ -105,7 +113,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			}, TimerFlags.REPEAT);
 		}
 
-		if (Config.AutoRecord.Enabled && hotReload && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
+		if (Config.AutoRecord.Enabled && hotReload && !mapChangePending && PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
 			Server.ExecuteCommand("tv_record \"autodemo\"");
 
 		maxFileSizeInMB = (Config.Discord.ServerBoost == 2) ? 50 : (Config.Discord.ServerBoost == 3) ? 100 : 25;
@@ -154,6 +162,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private HookResult CommandListener_Changelevel(CCSPlayerController? player, CommandInfo info)
 	{
+		mapChangePending = true;
 		if (!string.IsNullOrEmpty(fileName))
 			Server.ExecuteCommand("tv_stoprecord");
 
