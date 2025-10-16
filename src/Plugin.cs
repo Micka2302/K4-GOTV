@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace K4GOTV;
 
-[MinimumApiVersion(300)]
+[MinimumApiVersion(342)]
 public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 {
 	public override string ModuleName => "K4-GOTV";

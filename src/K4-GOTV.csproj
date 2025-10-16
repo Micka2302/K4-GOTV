@@ -13,12 +13,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="*">
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.342">
       <PrivateAssets>none</PrivateAssets>
       <ExcludeAssets>runtime</ExcludeAssets>
       <IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="FluentFTP" Version="*" />
+    <PackageReference Include="FluentFTP" Version="53.0.2" />
   </ItemGroup>
 
   <ItemGroup>
