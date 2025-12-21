@@ -1,4 +1,3 @@
-using CG.Web.MegaApiClient;
 using FluentFTP;
 using FluentFTP.Exceptions;
 using Microsoft.Extensions.Logging;
@@ -38,22 +37,5 @@ public class UploadService
 			await client.Disconnect();
 		}
 	}
-
-	public async Task<(string Link, string NodeId)> UploadToMegaAsync(string filePath)
-	{
-		try
-		{
-			var client = new MegaApiClient();
-			await client.LoginAsync(_config.Mega.Email, _config.Mega.Password);
-			var rootNode = (await client.GetNodesAsync()).Single(x => x.Type == NodeType.Root);
-			var uploadedNode = await client.UploadFileAsync(filePath, rootNode);
-			var downloadLink = await client.GetDownloadLinkAsync(uploadedNode);
-			return (downloadLink.ToString(), uploadedNode.Id.ToString());
-		}
-		catch (Exception ex)
-		{
-			_logger.LogError($"Mega upload error: {ex.Message}");
-			return ("Not uploaded to Mega.", string.Empty);
-		}
-	}
 }
+

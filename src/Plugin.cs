@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using CG.Web.MegaApiClient;
 using FluentFTP;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
@@ -16,7 +15,7 @@ namespace K4GOTV;
 public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 {
 	public override string ModuleName => "K4-GOTV";
-	public override string ModuleDescription => "Advanced GOTV handler with Discord, database, FTP, SFTP and Mega integration";
+	public override string ModuleDescription => "Advanced GOTV handler with Discord and FTP integration";
 	public override string ModuleVersion => "2.1.2";
 	public override string ModuleAuthor => "K4ryuu @ KitsuneLab";
 
@@ -24,15 +23,13 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private string? fileName = null;
 	private double LastPlayerCheckTime;
-	private bool DemoRequestedThisRound = false;
-	private readonly List<(string name, ulong steamid)> Requesters = [];
 	private double DemoStartTime = 0.0;
 	private int maxFileSizeInMB = 25;
-	private string DemoDirectory => Path.Combine(Server.GameDirectory, "csgo", Config.General.DemoDirectory);
+	private string demoDirectoryPath = string.Empty;
+	private string DemoDirectory => demoDirectoryPath;
 	private UploadService? uploadService;
-	private DatabaseService? databaseService;
 	private string RetentionFilePath => Path.Combine(ModuleDirectory, "uploads_retention.json");
-	private record UploadRetentionRecord(string Service, string Identifier, DateTime UploadedAt);
+	private record UploadRetentionRecord(string Identifier, DateTime UploadedAt);
 
 	public override void Load(bool hotReload)
 	{
@@ -62,9 +59,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				if (Config.AutoRecord.CropRounds && !string.IsNullOrEmpty(fileName))
 					Server.ExecuteCommand("tv_stoprecord");
 
-				if (Config.AutoRecord.CropRounds)
-					Requesters.Clear();
-
 				if (string.IsNullOrEmpty(fileName) && PlayerCount() > 0)
 					Server.NextWorldUpdate(() => Server.ExecuteCommand("tv_record \"autodemo\""));
 			}
@@ -86,10 +80,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			return HookResult.Continue;
 		});
 
-		Directory.CreateDirectory(Path.Combine(Server.GameDirectory, "csgo", Config.General.DemoDirectory));
-
-		if (Config.DemoRequest.Enabled)
-			AddCommand("css_demo", "Request the upload of the current demo", Command_DemoRequest);
+		EnsureDemoDirectory(Config);
 
 		if (Config.AutoRecord.StopOnIdle)
 		{
@@ -128,20 +119,17 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				foreach (var file in files)
 				{
 					if (File.GetCreationTime(file) < cutoff)
-						CSSThread.RunOnMainThread(async () => await FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions));
+						_ = Task.Run(() => FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions));
 				}
 			}, TimerFlags.REPEAT);
 		}
 
 		if (Config.Ftp.RetentionEnabled)
 		{
-			AddTimer(3600f, () => CSSThread.RunOnMainThread(async () => await CleanFtpRetention()), TimerFlags.REPEAT);
+			AddTimer(3600f, () => _ = Task.Run(CleanFtpRetention), TimerFlags.REPEAT);
 		}
 
-		if (Config.Mega.RetentionEnabled)
-		{
-			AddTimer(3600f, () => CSSThread.RunOnMainThread(async () => await CleanMegaRetention()), TimerFlags.REPEAT);
-		}
+
 	}
 
 	public override void Unload(bool hotReload)
@@ -151,7 +139,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	public override void OnAllPluginsLoaded(bool isReload)
 	{
-		CSSThread.RunOnMainThread(async () =>
+		_ = Task.Run(async () =>
 		{
 			if (Config.General.DeleteEveryDemoFromServerAfterServerStart)
 			{
@@ -216,14 +204,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			return HookResult.Continue;
 		}
 
-		if (Config.DemoRequest.Enabled && !DemoRequestedThisRound)
-		{
-			if (Config.DemoRequest.DeleteUnused)
-				CSSThread.RunOnMainThread(async () => await FileManager.DeleteFileAsync(demoPath, Logger, Config.General.LogDeletions));
-
-			ResetVariables();
-			return HookResult.Continue;
-		}
 
 		ProcessUpload(fileName, demoPath);
 		ResetVariables();
@@ -235,125 +215,113 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	{
 		string zipPath = Path.Combine(DemoDirectory, $"{fileName}.zip");
 		var demoLength = TimeSpan.FromSeconds(Server.EngineTime - DemoStartTime);
+		string mapName = Server.MapName;
+		string serverName = ConVar.Find("hostname")?.StringValue ?? "Unknown Server";
+		string roundLabel = (GameRules()?.GameRules?.TotalRoundsPlayed + 1)?.ToString() ?? "Unknown";
+		int playerCount = PlayerCount();
+		DateTime nowLocal = DateTime.Now;
+		string isoTimestamp = DateTime.UtcNow.ToString("o");
+		string ftpRemotePath = ReplacePlaceholdersForFileName(Path.Combine(Config.Ftp.RemoteDirectory, Path.GetFileName(zipPath)).Replace("\\", "/"), Path.GetFileName(zipPath));
+
 		var placeholders = new Dictionary<string, string>
 		{
 			["webhook_name"] = Config.Discord.WebhookName,
 			["webhook_avatar"] = Config.Discord.WebhookAvatar,
 			["message_text"] = Config.Discord.MessageText,
 			["embed_title"] = Config.Discord.EmbedTitle,
-			["map"] = Server.MapName,
-			["date"] = DateTime.Now.ToString("yyyy-MM-dd"),
-			["time"] = DateTime.Now.ToString("HH:mm:ss"),
-			["timedate"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+			["map"] = mapName,
+			["date"] = nowLocal.ToString("yyyy-MM-dd"),
+			["time"] = nowLocal.ToString("HH:mm:ss"),
+			["timedate"] = nowLocal.ToString("yyyy-MM-dd HH:mm:ss"),
 			["length"] = $"{demoLength.Minutes:00}:{demoLength.Seconds:00}",
-			["round"] = (GameRules()?.GameRules?.TotalRoundsPlayed + 1)?.ToString() ?? "Unknown",
-			["mega_link"] = "Not uploaded to Mega.",
+			["round"] = roundLabel,
 			["ftp_link"] = "Not uploaded to FTP.",
-			["requester_name"] = string.Join(", ", Requesters.Select(x => x.name)),
-			["requester_steamid"] = string.Join(", ", Requesters.Select(x => x.steamid)),
-			["requester_both"] = string.Join("\n", Requesters.Select(x => $"{x.name} ({x.steamid})")),
-			["requester_count"] = Requesters.Count.ToString(),
-			["player_count"] = PlayerCount().ToString(),
-			["server_name"] = ConVar.Find("hostname")?.StringValue ?? "Unknown Server",
+			["player_count"] = playerCount.ToString(),
+			["server_name"] = serverName,
 			["fileName"] = Path.GetFileNameWithoutExtension(fileName),
-			["iso_timestamp"] = DateTime.UtcNow.ToString("o"),
-			["file_size_warning"] = "",
+			["iso_timestamp"] = isoTimestamp,
+			["file_size_warning"] = string.Empty,
 			["fileSizeInKB"] = "0"
 		};
 
-		CSSThread.RunOnMainThread(async () =>
+		_ = Task.Run(async () =>
 		{
 			long fileSizeInBytes = 0;
 			try
 			{
-				if (!await FileManager.ZipDemoAsync(demoPath, zipPath, Logger))
-					return;
+			    if (!await FileManager.ZipDemoAsync(demoPath, zipPath, Logger))
+			        return;
 
-				fileSizeInBytes = new FileInfo(zipPath).Length;
-				long fileSizeInKB = fileSizeInBytes / 1024;
-				placeholders["fileSizeInKB"] = fileSizeInKB.ToString();
+			    fileSizeInBytes = new FileInfo(zipPath).Length;
+			    long fileSizeInKB = fileSizeInBytes / 1024;
+			    placeholders["fileSizeInKB"] = fileSizeInKB.ToString();
 
-				if (Config.Ftp.Enabled && !string.IsNullOrEmpty(Config.Ftp.Host) && !string.IsNullOrEmpty(Config.Ftp.Username) && !string.IsNullOrEmpty(Config.Ftp.Password) && uploadService != null)
-				{
-					string remoteFilePath = ReplacePlaceholdersForFileName(Path.Combine(Config.Ftp.RemoteDirectory, Path.GetFileName(zipPath)).Replace("\\", "/"), Path.GetFileName(zipPath));
-					string ftpLink = await uploadService.UploadToFtpAsync(zipPath, remoteFilePath);
-					placeholders["ftp_link"] = ftpLink;
-					if (Config.Ftp.RetentionEnabled)
-						AppendRetentionRecord("ftp", remoteFilePath);
-				}
+			    if (Config.Ftp.Enabled && !string.IsNullOrEmpty(Config.Ftp.Host) && !string.IsNullOrEmpty(Config.Ftp.Username) && !string.IsNullOrEmpty(Config.Ftp.Password) && uploadService != null)
+			    {
+			        string ftpLink = await uploadService.UploadToFtpAsync(zipPath, ftpRemotePath);
+			        placeholders["ftp_link"] = ftpLink;
+			        if (Config.Ftp.RetentionEnabled)
+			            AppendRetentionRecord(ftpRemotePath);
+			    }
 
-				if (Config.Mega.Enabled && !string.IsNullOrEmpty(Config.Mega.Email) && !string.IsNullOrEmpty(Config.Mega.Password) && uploadService != null)
-				{
-					var (megaLink, megaNodeId) = await uploadService.UploadToMegaAsync(zipPath);
-					placeholders["mega_link"] = megaLink;
-					if (Config.Mega.RetentionEnabled && !string.IsNullOrEmpty(megaNodeId))
-						AppendRetentionRecord("mega", megaNodeId);
-				}
+			    string payloadTemplatePath = Path.Combine(ModuleDirectory, "payload.json");
+			    if (!File.Exists(payloadTemplatePath))
+			    {
+			        Logger.LogError($"Payload template not found: {payloadTemplatePath}");
+			        return;
+			    }
 
-				string payloadTemplatePath = Path.Combine(ModuleDirectory, "payload.json");
-				if (!File.Exists(payloadTemplatePath))
-				{
-					Logger.LogError($"Payload template not found: {payloadTemplatePath}");
-					return;
-				}
+			    string payloadTemplate = await File.ReadAllTextAsync(payloadTemplatePath);
+			    if (fileSizeInBytes / (1024 * 1024) > maxFileSizeInMB)
+			    {
+			        Logger.LogWarning($"Zip file size ({fileSizeInBytes / (1024 * 1024)}MB) exceeds Discord's {maxFileSizeInMB}MB limit.");
+			        placeholders["file_size_warning"] = $"Warning: File size ({fileSizeInBytes / (1024 * 1024)}MB) exceeds Discord limit. Please use the FTP link.";
+			    }
 
-				string payloadTemplate = await File.ReadAllTextAsync(payloadTemplatePath);
-				if (fileSizeInBytes / (1024 * 1024) > maxFileSizeInMB)
-				{
-					Logger.LogWarning($"Zip file size ({fileSizeInBytes / (1024 * 1024)}MB) exceeds Discord's {maxFileSizeInMB}MB limit.");
-					placeholders["file_size_warning"] = $"⚠️ File size ({fileSizeInBytes / (1024 * 1024)}MB) exceeds Discord limit. Please use Mega or FTP link.";
-				}
+			    string payloadJson = ReplacePlaceholders(payloadTemplate, placeholders);
+			    if (!string.IsNullOrWhiteSpace(Config.Discord.WebhookURL))
+			    {
+			        using var httpClient = new HttpClient();
+			        var content = new MultipartFormDataContent
+			        {
+			            { new StringContent(payloadJson, Encoding.UTF8, "application/json"), "payload_json" }
+			        };
 
-				string payloadJson = ReplacePlaceholders(payloadTemplate, placeholders);
-				if (!string.IsNullOrWhiteSpace(Config.Discord.WebhookURL))
-				{
-					using var httpClient = new HttpClient();
-					var content = new MultipartFormDataContent
-					{
-						{ new StringContent(payloadJson, Encoding.UTF8, "application/json"), "payload_json" }
-					};
+			        if (File.Exists(zipPath) && (fileSizeInBytes / (1024 * 1024) <= maxFileSizeInMB) && Config.Discord.WebhookUploadFile)
+			        {
+			            content.Add(new ByteArrayContent(await File.ReadAllBytesAsync(zipPath)), "file", $"{fileName}.zip");
+			        }
 
-					if (File.Exists(zipPath) && (fileSizeInBytes / (1024 * 1024) <= maxFileSizeInMB) && Config.Discord.WebhookUploadFile)
-					{
-						content.Add(new ByteArrayContent(await File.ReadAllBytesAsync(zipPath)), "file", $"{fileName}.zip");
-					}
+			        var response = await httpClient.PostAsync(Config.Discord.WebhookURL, content);
+			        response.EnsureSuccessStatusCode();
 
-					var response = await httpClient.PostAsync(Config.Discord.WebhookURL, content);
-					response.EnsureSuccessStatusCode();
+			        if (Config.General.LogUploads)
+			            Logger.LogInformation($"Demo uploaded via Discord: {fileName}");
+			    }
+			    else if (Config.General.LogUploads)
+			    {
+			        Logger.LogInformation($"Demo processed (no Discord webhook configured): {fileName}");
+			    }
 
-					if (Config.General.LogUploads)
-						Logger.LogInformation($"Demo uploaded via Discord: {fileName}");
-				}
-				else if (Config.General.LogUploads)
-				{
-					Logger.LogInformation($"Demo processed (no Discord webhook configured): {fileName}");
-				}
+			    if (Config.General.DeleteDemoAfterUpload)
+			        await FileManager.DeleteFileAsync(demoPath, Logger, Config.General.LogDeletions);
 
-				if (Config.General.DeleteDemoAfterUpload)
-					await FileManager.DeleteFileAsync(demoPath, Logger, Config.General.LogDeletions);
-
-				if (Config.General.DeleteZippedDemoAfterUpload)
-					await FileManager.DeleteFileAsync(zipPath, Logger, Config.General.LogDeletions);
-
-				if (Config.Database.Enable && databaseService != null && (placeholders["mega_link"] != "Not uploaded to Mega." || placeholders["ftp_link"] != "Not uploaded to FTP."))
-				{
-					await databaseService.StoreDemoRecordAsync(placeholders);
-				}
+			    if (Config.General.DeleteZippedDemoAfterUpload)
+			        await FileManager.DeleteFileAsync(zipPath, Logger, Config.General.LogDeletions);
 			}
 			catch (HttpRequestException ex)
 			{
-				Logger.LogError($"Error during Discord upload: {ex.Message}");
+			    Logger.LogError($"Error during Discord upload: {ex.Message}");
 			}
 			catch (Exception ex)
 			{
-				Logger.LogError($"Unexpected error in ProcessUpload: {ex.Message}");
+			    Logger.LogError($"Unexpected error in ProcessUpload: {ex.Message}");
 			}
 		});
 	}
 
 	private void ResetVariables()
 	{
-		DemoRequestedThisRound = false;
 		DemoStartTime = 0.0;
 		fileName = null;
 	}
@@ -385,23 +353,6 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		return ReplacePlaceholders(pattern, placeholders);
 	}
 
-	public void Command_DemoRequest(CCSPlayerController? player, CommandInfo info)
-	{
-		if (Config.DemoRequest.PrintAll)
-		{
-			if (!DemoRequestedThisRound)
-				Server.PrintToChatAll($" {Localizer["k4.general.prefix"]} {Localizer["k4.chat.demo.request.all", player?.PlayerName ?? "Server"]}");
-		}
-		else
-		{
-			info.ReplyToCommand($" {Localizer["k4.general.prefix"]} {Localizer["k4.chat.demo.request.self"]}");
-		}
-
-		if (player?.IsValid == true && !Requesters.Contains((player.PlayerName, player.SteamID)))
-			Requesters.Add((player.PlayerName, player.SteamID));
-
-		DemoRequestedThisRound = true;
-	}
 
 	public void OnConfigParsed(PluginConfig config)
 	{
@@ -414,22 +365,8 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			config.General.DemoDirectory = "discord_demos";
 		}
 
-		string fullDemoPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
-		try
-		{
-			Directory.CreateDirectory(fullDemoPath);
-		}
-		catch (Exception ex)
-		{
-			Logger.LogError($"Failed to create demo directory: {ex.Message}");
-			config.General.DemoDirectory = "discord_demos";
-		}
+		EnsureDemoDirectory(config);
 
-		if (config.DemoRequest.Enabled)
-		{
-			config.AutoRecord.Enabled = true;
-			config.AutoRecord.CropRounds = true;
-		}
 
 		if (config.AutoRecord.CropRounds && !config.AutoRecord.Enabled)
 			Logger.LogWarning("AutoRecord.CropRounds enabled but AutoRecord is disabled. CropRounds will not work.");
@@ -440,12 +377,39 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		if (config.AutoRecord.StopOnIdle && config.AutoRecord.IdleTimeSeconds <= 0)
 			Logger.LogWarning("AutoRecord.IdleTimeSeconds must be greater than 0 when StopOnIdle is enabled.");
 
-		if (config.Database.Enable)
-			databaseService = new DatabaseService(config.Database, Logger);
 
 		this.Config = config;
 	}
 
+	private void EnsureDemoDirectory(PluginConfig config)
+	{
+		var resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+
+		try
+		{
+			Directory.CreateDirectory(resolvedPath);
+			demoDirectoryPath = resolvedPath;
+			return;
+		}
+		catch (Exception ex)
+		{
+			Logger.LogError($"Failed to create demo directory: {ex.Message}");
+		}
+
+		config.General.DemoDirectory = "discord_demos";
+		resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+
+		try
+		{
+			Directory.CreateDirectory(resolvedPath);
+		}
+		catch (Exception fallbackEx)
+		{
+			Logger.LogError($"Fallback demo directory creation failed: {fallbackEx.Message}");
+		}
+
+		demoDirectoryPath = resolvedPath;
+	}
 	private List<UploadRetentionRecord> LoadRetentionRecords()
 	{
 		if (!File.Exists(RetentionFilePath))
@@ -461,10 +425,10 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		File.WriteAllText(RetentionFilePath, json);
 	}
 
-	private void AppendRetentionRecord(string service, string identifier)
+	private void AppendRetentionRecord(string identifier)
 	{
 		var records = LoadRetentionRecords();
-		records.Add(new UploadRetentionRecord(service, identifier, DateTime.Now));
+		records.Add(new UploadRetentionRecord(identifier, DateTime.Now));
 		SaveRetentionRecords(records);
 	}
 
@@ -481,7 +445,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 		await ftpClient.AutoConnect();
 
-		var expiredRecords = records.Where(r => r.Service == "ftp" && (currentTime - r.UploadedAt).TotalHours >= Config.Ftp.RetentionHours);
+		var expiredRecords = records.Where(r => (currentTime - r.UploadedAt).TotalHours >= Config.Ftp.RetentionHours).ToList();
 
 		foreach (var record in expiredRecords)
 		{
@@ -507,41 +471,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		}
 	}
 
-	private async Task CleanMegaRetention()
-	{
-		var records = LoadRetentionRecords();
-		var now = DateTime.Now;
-		var toRemove = new List<UploadRetentionRecord>();
-		var client = new MegaApiClient();
 
-		await client.LoginAsync(Config.Mega.Email, Config.Mega.Password);
-
-		var expiredRecords = records.Where(r => r.Service == "mega" && (now - r.UploadedAt).TotalHours >= Config.Mega.RetentionHours);
-
-		foreach (var r in expiredRecords)
-		{
-			try
-			{
-				var nodes = await client.GetNodesAsync();
-				var node = nodes.SingleOrDefault(n => n.Id.ToString() == r.Identifier);
-
-				if (node != null)
-					await client.DeleteAsync(node, moveToTrash: false);
-
-				toRemove.Add(r);
-
-				if (Config.General.LogDeletions)
-					Logger.LogInformation($"Permanently deleted Mega node {r.Identifier} due to retention policy.");
-			}
-			catch (Exception ex)
-			{
-				Logger.LogError($"Error deleting Mega node {r.Identifier}: {ex.Message}");
-			}
-		}
-
-		if (toRemove.Count != 0)
-			SaveRetentionRecords(records.Except(toRemove).ToList());
-	}
 
 	public static int PlayerCount()
 		=> Utilities.GetPlayers().Count(p => p?.IsValid == true && !p.IsBot && !p.IsHLTV);
@@ -549,3 +479,23 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	public static CCSGameRulesProxy? GameRules()
 		=> Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
