@@ -5,6 +5,7 @@
 # Folders
 .build/
 .vanish/
+compiled/
 
 # SourcePawn
 *.smx

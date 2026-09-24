@@ -1,3 +1,29 @@
+-- 2026.09.24 - v2.1.6
+
+- fix: Use general.default-file-name for automatic recordings instead of hardcoding autodemo
+
+-- 2026.09.24 - v2.1.5
+
+- fix: Pass the absolute configured demo path to tv_record so Metamod search paths cannot redirect relative output
+- fix: Use the configured filename from the beginning instead of k4gotv_<id> temporary names
+- fix: Exclude active recordings and pending uploads from cleanup
+- test: Verify direct recording paths, configured names and in-place finalization/compression
+
+-- 2026.09.24 - v2.1.4
+
+- fix: Read tv_delay as Int32 to prevent an exception in the tv_record pre hook
+- diagnostics: Log plugin version and recording strategy on load; align assembly version with plugin version
+
+-- 2026.09.24 - v2.1.3
+
+- update: CounterStrikeSharp API and minimum API version to 1.0.375 (.NET 10)
+- fix: Record to a unique engine filename, then finalize into the configured demo directory after stopping
+- fix: Process tv_stoprecord in the post hook and wait for delayed HLTV file finalization
+- fix: Confirm file creation before announcing a recording and recover from failed starts
+- fix: Clear stale state on stops and map changes, and recheck deferred automatic starts
+- fix: Preserve source files and existing archives on finalization/compression failures
+- test: Add standalone regression checks for output paths, delayed writes, locks, missing files and collisions
+
 -- 2025.05.21 - v2.1.2
 
 - fix: Improved file deletion to handle locked files more robustly with incremental retry delays
