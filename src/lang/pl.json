@@ -1,3 +1,4 @@
 {
-  "k4.general.prefix": "{silver}[ {lime}K4-Demo {silver}]"
+  "k4.general.prefix": "{silver}[ {lime}K4-Demo {silver}]",
+  "k4.demo.start": "{silver}Rozpoczęto nagrywanie dema {lime}{0}{silver}."
 }

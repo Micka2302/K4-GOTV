@@ -54,7 +54,25 @@ They all should be used in the format `{placeholder}`
 
 To use this server addon, you'll need the following dependencies installed:
 
-- [**CounterStrikeSharp**](https://github.com/roflmuffin/CounterStrikeSharp/releases): CounterStrikeSharp allows you to write server plugins in C# for Counter-Strike 2/Source2/CS2
+- [**CounterStrikeSharp 1.0.375**](https://github.com/roflmuffin/CounterStrikeSharp/releases/tag/v1.0.375) or newer. Version 1.0.375 includes compatibility fixes for CS2 1.41.8.2.
+- .NET 10 (included in the CounterStrikeSharp **with-runtime** download).
+- [**Metamod:Source 2.x build 1467 or newer**](https://docs.cssharp.dev/docs/guides/getting-started.html), with KHook support.
+
+### Updating and checking demo recording
+
+Stop the server, update its full CounterStrikeSharp installation (including native binaries, API and gamedata), and copy the plugin's `counterstrikesharp` folder into `game/csgo/addons/`. Updating only `K4-GOTV.dll` does not update CounterStrikeSharp itself. Restart the server after installing both.
+
+Ensure `tv_enable 1` is configured before loading the map, and use `tv_autorecord 0` when K4-GOTV manages recording. Enable `auto-record.enabled` in the plugin configuration. If CSTV was enabled during a running map, reload the map before testing. Use `meta list`, `css_plugins list` and `tv_status` in the server console to check the installation.
+
+Relative recording paths can resolve under `game/csgo/addons/metamod/`, causing `CDemoFile::Open: couldn't open file discord_demos/... for writing` when that subdirectory does not exist there. Starting with 2.1.5, K4-GOTV passes the absolute path of the configured `general.demo-directory` and the configured filename directly to `tv_record`. Automatic recordings use `general.default-file-name` for the `{fileName}` placeholder: with `"default-file-name": "retakes4"`, the default regular pattern produces `game/csgo/discord_demos/retakes4_<map>_<date>_<time>.dem` from the start. The `regular-file-naming-pattern` and `crop-rounds-file-naming-pattern` settings still control naming. An explicit name supplied through `tv_record <name>` overrides the default.
+
+The plugin logs the requested and confirmed recording paths. It announces a start only after finding a non-empty file, retries failed starts, and clears the recording state on map changes and stops. After `tv_stoprecord`, it waits for a stable, accessible file before compressing it in place. Active recordings and pending uploads are excluded from cleanup. Demos shorter than `minimum-demo-duration` are not uploaded. The existing deletion settings still apply after processing/upload; set `delete-demo-after-upload` to `false` to keep the `.dem` locally.
+
+The 2.1.3/2.1.4 temporary recordings named `k4gotv_<id>.dem` are not automatically renamed by 2.1.5: their original intended name was only held in memory. Preserve those files and move/rename them manually after stopping the server if needed.
+
+To verify on a live server, join with the configured minimum player count, record for at least 10 seconds, then run `tv_stoprecord`. Check for `Demo recording confirmed` and `Demo finalized` in the logs, and verify playback of the `.dem` from the resulting archive. Repeat across a map change and with round cropping if enabled. Compilation and local file tests cannot validate playback in CS2.
+
+Build with the .NET 10 SDK using `dotnet build src/K4-GOTV.csproj -c Release`. Run the standalone file-handling regression checks using `dotnet run --project tests/K4-GOTV.RegressionTests.csproj -c Release`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

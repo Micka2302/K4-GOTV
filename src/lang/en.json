@@ -1,3 +1,4 @@
 {
-  "k4.general.prefix": "{silver}[ {lime}K4-Demo {silver}]"
+  "k4.general.prefix": "{silver}[Absynthium - Demo]",
+  "k4.demo.start": "{white}Recording started for demo {lime}{0}"
 }

@@ -7,16 +7,17 @@ using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Timers;
+using CounterStrikeSharp.API.Core.Translations;
 using Microsoft.Extensions.Logging;
 
 namespace K4GOTV;
 
-[MinimumApiVersion(300)]
+[MinimumApiVersion(375)]
 public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 {
 	public override string ModuleName => "K4-GOTV";
 	public override string ModuleDescription => "Advanced GOTV handler with Discord and FTP integration";
-	public override string ModuleVersion => "2.1.2";
+	public override string ModuleVersion => "2.1.6";
 	public override string ModuleAuthor => "K4ryuu @ KitsuneLab";
 
 	public required PluginConfig Config { get; set; } = new PluginConfig();
@@ -26,6 +27,12 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	private double DemoStartTime = 0.0;
 	private int maxFileSizeInMB = 25;
 	private string demoDirectoryPath = string.Empty;
+	private bool mapChangePending = false;
+	private string? forwardedRecordPath;
+	private int recordingGeneration;
+	private string[] recordingPaths = [];
+	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> pendingDemoNames = new();
+	private string CsgoDirectory => DemoPaths.GetCsgoDirectory(Server.GameDirectory);
 	private string DemoDirectory => demoDirectoryPath;
 	private UploadService? uploadService;
 	private string RetentionFilePath => Path.Combine(ModuleDirectory, "uploads_retention.json");
@@ -33,8 +40,8 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	public override void Load(bool hotReload)
 	{
-		AddCommandListener("tv_record", CommandListener_Record);
-		AddCommandListener("tv_stoprecord", CommandListener_StopRecord);
+		AddCommandListener("tv_record", CommandListener_Record, HookMode.Pre);
+		AddCommandListener("tv_stoprecord", CommandListener_StopRecord, HookMode.Post);
 		AddCommandListener("changelevel", CommandListener_Changelevel, HookMode.Pre);
 		AddCommandListener("map", CommandListener_Changelevel, HookMode.Pre);
 		AddCommandListener("host_workshop_map", CommandListener_Changelevel, HookMode.Pre);
@@ -42,14 +49,22 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 		RegisterEventHandler((EventCsWinPanelMatch @event, GameEventInfo info) =>
 		{
+			mapChangePending = true;
 			Server.ExecuteCommand("tv_stoprecord");
 			return HookResult.Continue;
 		});
 
 		RegisterListener<Listeners.OnMapEnd>(() =>
 		{
+			mapChangePending = true;
 			if (!string.IsNullOrEmpty(fileName))
 				Server.ExecuteCommand("tv_stoprecord");
+		});
+
+		RegisterListener<Listeners.OnMapStart>((mapName) =>
+		{
+			ResetVariables();
+			mapChangePending = false;
 		});
 
 		RegisterEventHandler((EventRoundStart @event, GameEventInfo info) =>
@@ -59,8 +74,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				if (Config.AutoRecord.CropRounds && !string.IsNullOrEmpty(fileName))
 					Server.ExecuteCommand("tv_stoprecord");
 
-				if (string.IsNullOrEmpty(fileName) && PlayerCount() > 0)
-					Server.NextWorldUpdate(() => Server.ExecuteCommand("tv_record \"autodemo\""));
+				Server.NextWorldUpdate(TryAutoRecord);
 			}
 			return HookResult.Continue;
 		});
@@ -71,16 +85,15 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			if (player?.IsValid == true && !player.IsBot && !player.IsHLTV)
 				LastPlayerCheckTime = Server.EngineTime;
 
-			if (string.IsNullOrEmpty(fileName) && Config.AutoRecord.Enabled)
-			{
-				Server.ExecuteCommand("tv_record");
-				Logger.LogInformation("Recording started due to player activity detected.");
-			}
+			Server.NextWorldUpdate(TryAutoRecord);
 
 			return HookResult.Continue;
 		});
 
 		EnsureDemoDirectory(Config);
+		Logger.LogInformation("K4-GOTV {Version} loaded: recording directly in {DemoDirectory} using configured filenames and absolute paths.", ModuleVersion, DemoDirectory);
+		// Retry when CSTV was not ready at player activation or round start.
+		AddTimer(5.0f, TryAutoRecord, TimerFlags.REPEAT);
 
 		if (Config.AutoRecord.StopOnIdle)
 		{
@@ -104,8 +117,8 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			}, TimerFlags.REPEAT);
 		}
 
-		if (Config.AutoRecord.Enabled && hotReload && PlayerCount() > 0)
-			Server.ExecuteCommand("tv_record \"autodemo\"");
+		if (hotReload)
+			Server.NextWorldUpdate(TryAutoRecord);
 
 		maxFileSizeInMB = (Config.Discord.ServerBoost == 2) ? 50 : (Config.Discord.ServerBoost == 3) ? 100 : 25;
 		uploadService = new UploadService(Config, Logger);
@@ -119,7 +132,11 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				foreach (var file in files)
 				{
 					if (File.GetCreationTime(file) < cutoff)
-						_ = Task.Run(() => FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions));
+						_ = Task.Run(async () =>
+						{
+							if (!IsDemoInUse(file))
+								await FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions);
+						});
 				}
 			}, TimerFlags.REPEAT);
 		}
@@ -134,7 +151,9 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	public override void Unload(bool hotReload)
 	{
+		mapChangePending = true;
 		Server.ExecuteCommand("tv_stoprecord");
+		ResetVariables();
 	}
 
 	public override void OnAllPluginsLoaded(bool isReload)
@@ -146,13 +165,15 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				var allFiles = Directory.GetFiles(DemoDirectory, "*.dem").Concat(Directory.GetFiles(DemoDirectory, "*.zip")).ToArray();
 
 				foreach (var file in allFiles)
-					await FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions);
+					if (!IsDemoInUse(file))
+						await FileManager.DeleteFileAsync(file, Logger, Config.General.LogDeletions);
 			}
 		});
 	}
 
 	private HookResult CommandListener_Changelevel(CCSPlayerController? player, CommandInfo info)
 	{
+		mapChangePending = true;
 		if (!string.IsNullOrEmpty(fileName))
 			Server.ExecuteCommand("tv_stoprecord");
 
@@ -161,58 +182,120 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private HookResult CommandListener_Record(CCSPlayerController? player, CommandInfo info)
 	{
-		if (!Config.AutoRecord.Enabled || fileName != null)
+		if (!Config.AutoRecord.Enabled)
 			return HookResult.Continue;
+
+		string fileNameArg = info.ArgCount > 1 ? info.GetArg(1) : string.Empty;
+		// Only our rewritten command may pass through while a demo is reserved.
+		if (forwardedRecordPath != null && fileNameArg == forwardedRecordPath)
+		{
+			forwardedRecordPath = null;
+			return HookResult.Continue;
+		}
+		if (mapChangePending || fileName != null)
+			return HookResult.Stop;
 
 		if (!Config.AutoRecord.RecordWarmup && GameRules()?.GameRules?.WarmupPeriod == true)
-			return HookResult.Continue;
+			return HookResult.Stop;
 
 		DemoStartTime = Server.EngineTime;
-		string fileNameArg = info.ArgString.Trim().Replace("\"", "");
+		LastPlayerCheckTime = DemoStartTime;
 		string baseName = string.IsNullOrEmpty(fileNameArg) ? Config.General.DefaultFileName : fileNameArg;
 		string pattern = (Config.AutoRecord.Enabled && Config.AutoRecord.CropRounds)
 			? Config.General.CropRoundsFileNamingPattern
 			: Config.General.RegularFileNamingPattern;
 		fileName = ReplacePlaceholdersForFileName(pattern, baseName);
+		// Map names (including workshop paths) must remain a single filename.
+		fileName = string.Concat(fileName.Select(c => char.IsControl(c) || "<>:\"/\\|?*;".Contains(c) ? '_' : c));
+		string uniqueBaseName = fileName;
 
 		string fullPath = Path.Combine(DemoDirectory, $"{fileName}.dem");
 		int counter = 1;
-		while (File.Exists(fullPath))
+		while (File.Exists(fullPath) || File.Exists(Path.ChangeExtension(fullPath, ".zip")) || pendingDemoNames.ContainsKey(fileName))
 		{
-			fileName = $"{fileName}_{counter}";
+			fileName = $"{uniqueBaseName}_{counter}";
 			fullPath = Path.Combine(DemoDirectory, $"{fileName}.dem");
 			counter++;
 		}
 
-		string relativePath = Path.Combine(Config.General.DemoDirectory, $"{fileName}.dem");
-		Server.ExecuteCommand($"tv_record \"{relativePath}\"");
+		// A relative path may resolve under addons/metamod instead of csgo.
+		// Use the final absolute path and configured filename from the start.
+		string commandPath = DemoPaths.GetRecordingPath(DemoDirectory, $"{fileName}.dem");
+		recordingPaths = [commandPath];
+		string[] candidatePaths = recordingPaths;
+		forwardedRecordPath = commandPath;
+		int generation = ++recordingGeneration;
+		Server.NextWorldUpdate(() =>
+		{
+			if (generation != recordingGeneration || mapChangePending)
+				return;
+			Logger.LogInformation("Requesting demo recording: {DemoPath}", commandPath);
+			Server.ExecuteCommand($"tv_record \"{commandPath}\"");
+		});
+		// A queued command is not proof that the engine actually opened a demo.
+		float timeout = Math.Max(30f, (ConVar.Find("tv_delay")?.GetPrimitiveValue<int>() ?? 0) + 15f);
+		CounterStrikeSharp.API.Modules.Timers.Timer? confirmationTimer = null;
+		confirmationTimer = AddTimer(1f, () =>
+		{
+			if (generation != recordingGeneration)
+			{
+				confirmationTimer?.Kill();
+				return;
+			}
+			string? recordedPath = candidatePaths.FirstOrDefault(path => File.Exists(path) && new FileInfo(path).Length > 0);
+			if (recordedPath != null)
+			{
+				Logger.LogInformation("Demo recording confirmed: {DemoPath}", recordedPath);
+				AnnounceRecordingStart();
+				confirmationTimer?.Kill();
+			}
+			else if (Server.EngineTime - DemoStartTime >= timeout)
+			{
+				Logger.LogError("CSTV did not create a non-empty demo. Checked: {DemoPaths}. Check tv_enable 1, tv_status, directory permissions and the server's CounterStrikeSharp installation. Reload the map after enabling CSTV.", string.Join(", ", candidatePaths));
+				Server.ExecuteCommand("tv_stoprecord");
+				ResetVariables();
+				confirmationTimer?.Kill();
+			}
+		}, TimerFlags.REPEAT | TimerFlags.STOP_ON_MAPCHANGE);
 		return HookResult.Stop;
+	}
+
+	private void TryAutoRecord()
+	{
+		if (!Config.AutoRecord.Enabled || mapChangePending || fileName != null)
+			return;
+		if (!Config.AutoRecord.RecordWarmup && GameRules()?.GameRules?.WarmupPeriod == true)
+			return;
+		if (PlayerCount() >= Config.AutoRecord.MinPlayerStartRecord)
+			// The record listener resolves an omitted name from DefaultFileName.
+			Server.ExecuteCommand("tv_record");
 	}
 
 	private HookResult CommandListener_StopRecord(CCSPlayerController? player, CommandInfo info)
 	{
-		if (string.IsNullOrEmpty(fileName) || (Server.EngineTime - DemoStartTime) < Config.General.MinimumDemoDuration)
+		if (string.IsNullOrEmpty(fileName))
 		{
 			ResetVariables();
 			return HookResult.Continue;
 		}
 
-		string demoPath = Path.Combine(DemoDirectory, $"{fileName}.dem");
-		if (!File.Exists(demoPath))
+		try
 		{
-			Logger.LogError($"Demo file not found: {demoPath} - Recording stopped without processing.");
-			return HookResult.Continue;
+			// The post hook runs after the engine's stop command; ZipDemoAsync also
+			// retries if the final file has not been made available yet.
+			ProcessUpload(fileName, recordingPaths, Server.EngineTime - DemoStartTime >= Config.General.MinimumDemoDuration);
 		}
-
-
-		ProcessUpload(fileName, demoPath);
-		ResetVariables();
+		finally
+		{
+			ResetVariables();
+		}
 
 		return HookResult.Continue;
 	}
 
-	public void ProcessUpload(string fileName, string demoPath)
+	private void ProcessUpload(string fileName, string[] sourcePaths, bool upload)
 	{
+		string demoPath = Path.Combine(DemoDirectory, $"{fileName}.dem");
 		string zipPath = Path.Combine(DemoDirectory, $"{fileName}.zip");
 		var demoLength = TimeSpan.FromSeconds(Server.EngineTime - DemoStartTime);
 		string mapName = Server.MapName;
@@ -244,11 +327,16 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			["fileSizeInKB"] = "0"
 		};
 
+		pendingDemoNames.TryAdd(fileName, 0);
 		_ = Task.Run(async () =>
 		{
 			long fileSizeInBytes = 0;
 			try
 			{
+			    if (!await FileManager.FinalizeDemoAsync(sourcePaths, demoPath, Logger))
+			        return;
+			    if (!upload)
+			        return;
 			    if (!await FileManager.ZipDemoAsync(demoPath, zipPath, Logger))
 			        return;
 
@@ -317,13 +405,26 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			{
 			    Logger.LogError($"Unexpected error in ProcessUpload: {ex.Message}");
 			}
+			finally
+			{
+			    pendingDemoNames.TryRemove(fileName, out _);
+			}
 		});
 	}
 
 	private void ResetVariables()
 	{
+		recordingGeneration++;
+		forwardedRecordPath = null;
+		recordingPaths = [];
 		DemoStartTime = 0.0;
 		fileName = null;
+	}
+
+	private bool IsDemoInUse(string path)
+	{
+		string name = Path.GetFileNameWithoutExtension(path);
+		return name == fileName || pendingDemoNames.ContainsKey(name);
 	}
 
 	private static string ReplacePlaceholders(string input, Dictionary<string, string> placeholders)
@@ -374,16 +475,22 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		if (string.IsNullOrEmpty(config.Discord.WebhookURL))
 			Logger.LogWarning("Discord.WebhookURL is not set. Discord upload will be skipped.");
 
+
 		if (config.AutoRecord.StopOnIdle && config.AutoRecord.IdleTimeSeconds <= 0)
 			Logger.LogWarning("AutoRecord.IdleTimeSeconds must be greater than 0 when StopOnIdle is enabled.");
 
+		if (config.AutoRecord.MinPlayerStartRecord < 1)
+		{
+			Logger.LogWarning("AutoRecord.MinPlayerStartRecord must be at least 1. Using 1.");
+			config.AutoRecord.MinPlayerStartRecord = 1;
+		}
 
 		this.Config = config;
 	}
 
 	private void EnsureDemoDirectory(PluginConfig config)
 	{
-		var resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+		var resolvedPath = Path.GetFullPath(Path.Combine(CsgoDirectory, config.General.DemoDirectory));
 
 		try
 		{
@@ -397,7 +504,7 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		}
 
 		config.General.DemoDirectory = "discord_demos";
-		resolvedPath = Path.Combine(Server.GameDirectory, "csgo", config.General.DemoDirectory);
+		resolvedPath = Path.Combine(CsgoDirectory, config.General.DemoDirectory);
 
 		try
 		{
@@ -468,6 +575,22 @@ public sealed partial class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		if (recordsToRemove.Count != 0)
 		{
 			SaveRetentionRecords(records.Except(recordsToRemove).ToList());
+		}
+	}
+
+	private void AnnounceRecordingStart()
+	{
+		if (string.IsNullOrEmpty(fileName))
+			return;
+
+		foreach (var target in Utilities.GetPlayers())
+		{
+			if (target?.IsValid != true || target.IsBot || target.IsHLTV)
+				continue;
+
+			string prefix = Localizer?.ForPlayer(target, "k4.general.prefix") ?? "{silver}[K4-GOTV]";
+			string message = Localizer?.ForPlayer(target, "k4.demo.start", fileName) ?? $"Recording started for demo {fileName}";
+			target.PrintToChat($"{prefix} {message}");
 		}
 	}
 

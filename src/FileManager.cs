@@ -5,18 +5,57 @@ namespace K4GOTV;
 
 public static class FileManager
 {
+	public static async Task<bool> FinalizeDemoAsync(string[] sourcePaths, string destination, ILogger logger)
+	{
+		// HLTVServerAsync may finish writing after tv_stoprecord returns.
+		// Require stable size/time as well as an exclusive handle before moving.
+		(string Path, long Length, DateTime Modified)? previous = null;
+		int stableChecks = 0;
+		for (int attempt = 0; attempt < 30; attempt++)
+		{
+			await Task.Delay(500);
+			try
+			{
+				string? source = sourcePaths.FirstOrDefault(File.Exists);
+				if (source == null)
+					continue;
+				var info = new FileInfo(source);
+				var current = (source, info.Length, info.LastWriteTimeUtc);
+				stableChecks = previous == current && info.Length > 0 ? stableChecks + 1 : 0;
+				previous = current;
+				if (stableChecks < 3)
+					continue;
+				using (var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)) { }
+				if (!Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.Ordinal))
+					File.Move(source, destination, overwrite: false);
+				logger.LogInformation("Demo finalized: {DemoPath}", destination);
+				return true;
+			}
+			catch (IOException)
+			{
+				// Missing, locked or still being finalized: retain the source and retry.
+			}
+			catch (Exception ex)
+			{
+				logger.LogError(ex, "Could not finalize demo to {DemoPath}. Original recording retained.", destination);
+				return false;
+			}
+		}
+		logger.LogError("Could not finalize demo to {DemoPath}. Original recording retained if present. Checked: {SourcePaths}", destination, string.Join(", ", sourcePaths));
+		return false;
+	}
+
 	public static async Task<bool> ZipDemoAsync(string demoPath, string zipPath, ILogger logger)
 	{
 		int retryCount = 5;
 		int delayMilliseconds = 2000;
-		bool isFileReady = false;
+		FileStream? demoStream = null;
 
-		while (retryCount > 0 && !isFileReady)
+		while (retryCount > 0 && demoStream == null)
 		{
 			try
 			{
-				using FileStream fs = new FileStream(demoPath, FileMode.Open, FileAccess.Read, FileShare.None);
-				isFileReady = true;
+				demoStream = new FileStream(demoPath, FileMode.Open, FileAccess.Read, FileShare.None);
 			}
 			catch (IOException)
 			{
@@ -25,22 +64,42 @@ public static class FileManager
 			}
 		}
 
-		if (!isFileReady)
+		if (demoStream == null)
 		{
 			logger.LogError($"Failed to access file: {demoPath}");
 			return false;
 		}
 
-		try
+		using (demoStream)
 		{
-			using var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create);
-			archive.CreateEntryFromFile(demoPath, Path.GetFileName(demoPath), CompressionLevel.Fastest);
-			return true;
-		}
-		catch (Exception ex)
-		{
-			logger.LogError($"Error occurred during compression: {ex.Message}");
-			return false;
+			if (demoStream.Length == 0)
+			{
+				logger.LogError("Demo is empty, skipping compression: {DemoPath}", demoPath);
+				return false;
+			}
+
+			bool createdArchive = false;
+			try
+			{
+				// Keep the same exclusive source handle until copying is complete.
+				using var zipStream = new FileStream(zipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+				createdArchive = true;
+				using var archive = new ZipArchive(zipStream, ZipArchiveMode.Create);
+				var entry = archive.CreateEntry(Path.GetFileName(demoPath), CompressionLevel.Fastest);
+				using var entryStream = entry.Open();
+				await demoStream.CopyToAsync(entryStream);
+				return true;
+			}
+			catch (Exception ex)
+			{
+				logger.LogError($"Error occurred during compression: {ex.Message}");
+				if (createdArchive)
+				{
+					try { File.Delete(zipPath); }
+					catch (Exception cleanupEx) { logger.LogWarning(cleanupEx, "Could not remove incomplete archive: {ZipPath}", zipPath); }
+				}
+				return false;
+			}
 		}
 	}
 
